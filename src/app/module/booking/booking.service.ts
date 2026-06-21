@@ -3,8 +3,8 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
@@ -29,6 +29,8 @@ interface EmailBooking extends CreateBookingDto {}
 
 @Injectable()
 export class BookingService {
+  private readonly logger = new Logger(BookingService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findAvailableTimeslots() {
@@ -37,9 +39,12 @@ export class BookingService {
       'https://readdy.ai/api/public/calendar/timeslots/32d14abe-426b-4b1c-b8ab-9b069b8a5627.54c62550c35f1b35b5a7f93adfb9a9c1dbfbc20abc737bd9a6d49c897df8989d';
 
     try {
-      const response = await axios.get<ExternalTimeslot[] | {
-        timeslots?: ExternalTimeslot[];
-      }>(timeslotsApi);
+      const response = await axios.get<
+        | ExternalTimeslot[]
+        | {
+            timeslots?: ExternalTimeslot[];
+          }
+      >(timeslotsApi);
       const raw = response.data;
       const slots = Array.isArray(raw) ? raw : raw.timeslots || [];
       const bookedStarts = await this.prisma.booking.findMany({
@@ -72,18 +77,9 @@ export class BookingService {
       throw new BadRequestException('endTime must be after startTime.');
     }
 
-    const transporter = this.createTransporter();
+    let booking: { id: string };
     try {
-      await transporter.verify();
-    } catch {
-      throw new ServiceUnavailableException(
-        'Email SMTP settings are invalid or unavailable.',
-      );
-    }
-
-    let bookingId: string | undefined;
-    try {
-      const booking = await this.prisma.booking.create({
+      booking = await this.prisma.booking.create({
         data: {
           customerName: createBookingDto.customerName.trim(),
           customerEmail: createBookingDto.customerEmail.trim(),
@@ -95,22 +91,10 @@ export class BookingService {
           price: new Prisma.Decimal(createBookingDto.price),
           startTime,
           endTime,
-          paymentStatus: this.toPaymentStatus(
-            createBookingDto.paymentStatus,
-          ),
+          paymentStatus: this.toPaymentStatus(createBookingDto.paymentStatus),
         },
       });
-      bookingId = booking.id;
-
-      await this.sendBookingEmails(createBookingDto, transporter);
-      return { ok: true, bookingId };
     } catch (error) {
-      if (bookingId) {
-        await this.prisma.booking
-          .delete({ where: { id: bookingId } })
-          .catch(() => undefined);
-      }
-
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
@@ -121,6 +105,28 @@ export class BookingService {
       }
       throw error;
     }
+
+    let emailSent = false;
+    try {
+      const transporter = this.createTransporter();
+      await this.sendBookingEmails(createBookingDto, transporter);
+      emailSent = true;
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'Unknown email error';
+      this.logger.error(
+        `Booking ${booking.id} was saved, but confirmation email delivery failed: ${reason}`,
+      );
+    }
+
+    return {
+      ok: true,
+      bookingId: booking.id,
+      emailSent,
+      message: emailSent
+        ? 'Booking created and confirmation email sent.'
+        : 'Booking created, but confirmation email could not be sent.',
+    };
   }
 
   findAll() {
@@ -187,9 +193,7 @@ export class BookingService {
     const user = process.env.EMAIL_ADDRESS;
     const pass = process.env.EMAIL_PASS;
     if (!host || !user || !pass) {
-      throw new ServiceUnavailableException(
-        'Email SMTP settings are not configured.',
-      );
+      throw new Error('Email SMTP settings are not configured.');
     }
 
     return nodemailer.createTransport({
@@ -270,9 +274,7 @@ export class BookingService {
       )}`,
       `DESCRIPTION:${this.escapeIcs(description)}`,
       `LOCATION:${this.escapeIcs(location)}`,
-      `ORGANIZER;CN=${this.escapeIcs(
-        companyName,
-      )}:mailto:${organizerEmail}`,
+      `ORGANIZER;CN=${this.escapeIcs(companyName)}:mailto:${organizerEmail}`,
       `ATTENDEE;CN=${this.escapeIcs(
         booking.customerName,
       )};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${booking.customerEmail}`,
