@@ -1,0 +1,27 @@
+services:
+  app:
+    image: ${DOCKER_USERNAME}/nestjs-app:latest
+    build:
+      context: .
+      target: production
+    container_name: nestjs_app
+    restart: unless-stopped
+    ports:
+      - '${PORT}:${PORT}'
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    networks:
+      - app_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge

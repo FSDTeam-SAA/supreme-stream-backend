@@ -1,0 +1,30 @@
+enum PaymentStatus {
+  PAY_ON_SERVICE_DAY @map("pay-on-service-day")
+  PAYMENT_PENDING   @map("payment-pending")
+  QUOTE_REQUESTED   @map("quote-requested")
+  PAID              @map("paid")
+  PENDING           @map("pending")
+  CANCELLED
+}
+
+model Booking {
+  id            String        @id @default(uuid())
+  customerName  String
+  customerEmail String
+  customerPhone String
+  address       String
+  city          String
+  zipCode       String
+  services      String
+  price         Decimal
+  startTime     DateTime      @unique
+  endTime       DateTime
+  paymentStatus PaymentStatus @default(PAY_ON_SERVICE_DAY)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([customerEmail])
+  @@index([endTime])
+
+  @@map("bookings")
+}
