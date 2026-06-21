@@ -26,48 +26,48 @@ export type BookingPaymentStatus = (typeof paymentStatuses)[number];
 export class CreateBookingDto {
   @IsString()
   @IsNotEmpty()
-  customerName: string;
+  customerName!: string;
 
   @IsEmail()
-  customerEmail: string;
+  customerEmail!: string;
 
   @IsString()
   @IsNotEmpty()
-  customerPhone: string;
+  customerPhone!: string;
 
   @IsString()
   @IsNotEmpty()
-  address: string;
+  address!: string;
 
   @IsString()
   @IsNotEmpty()
-  city: string;
+  city!: string;
 
   @IsString()
   @IsNotEmpty()
-  zipCode: string;
+  zipCode!: string;
 
   @IsString()
   @IsNotEmpty()
-  services: string;
+  services!: string;
 
   @Type(() => Number)
   @IsNumber()
   @IsPositive()
-  price: number;
+  price!: number;
 
   @IsString()
   @Matches(bookingDateTimePattern, {
     message: 'startTime must use YYYY-MM-DD HH:mm:ss format.',
   })
-  startTime: string;
+  startTime!: string;
 
   @IsString()
   @Matches(bookingDateTimePattern, {
     message: 'endTime must use YYYY-MM-DD HH:mm:ss format.',
   })
-  endTime: string;
+  endTime!: string;
 
   @IsIn(paymentStatuses)
-  paymentStatus: BookingPaymentStatus;
+  paymentStatus!: BookingPaymentStatus;
 }
