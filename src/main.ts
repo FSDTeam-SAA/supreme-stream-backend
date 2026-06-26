@@ -18,7 +18,7 @@ async function bootstrap() {
 
   app.use(cookieParser());
   app.enableCors({
-    origin: '*',
+    origin: ["https://supremesteaming.com","https://www.supremesteaming.com","http://localhost:3000"],
     credentials: true,
   });
 
