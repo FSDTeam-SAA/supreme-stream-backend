@@ -248,7 +248,8 @@ export class BookingService {
       .join(', ');
     const description = [
       `Customer: ${booking.customerName}`,
-      `Email: ${booking.customerEmail}`,
+      `Client email: ${booking.customerEmail}`,
+      `Organizer email: ${organizerEmail}`,
       `Phone: ${booking.customerPhone}`,
       `Services: ${booking.services}`,
       `Estimated price: ${this.money(booking.price)}`,
@@ -278,9 +279,6 @@ export class BookingService {
       `ATTENDEE;CN=${this.escapeIcs(
         booking.customerName,
       )};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${booking.customerEmail}`,
-      `ATTENDEE;CN=${this.escapeIcs(
-        companyName,
-      )};ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:${organizerEmail}`,
       'STATUS:CONFIRMED',
       'SEQUENCE:0',
       'BEGIN:VALARM',
@@ -328,7 +326,7 @@ export class BookingService {
         </table>
         <div style="margin:24px 0;text-align:center">
           <a href="${this.escapeHtml(
-            this.buildGoogleCalendarUrl(booking, recipient),
+            this.buildGoogleCalendarUrl(booking),
           )}" target="_blank" rel="noopener noreferrer"
             style="display:inline-block;background:#0066CC;color:#fff;text-decoration:none;padding:14px 24px;border-radius:8px;font-weight:700">
             Add to Google Calendar
@@ -338,10 +336,7 @@ export class BookingService {
     `;
   }
 
-  private buildGoogleCalendarUrl(
-    booking: EmailBooking,
-    recipient: 'customer' | 'organizer',
-  ) {
+  private buildGoogleCalendarUrl(booking: EmailBooking) {
     const companyName = process.env.COMPANY_NAME || 'Supreme Steam';
     const organizerEmail =
       process.env.ORGANIZER_EMAIL || process.env.EMAIL_ADDRESS || '';
@@ -349,8 +344,6 @@ export class BookingService {
     const location = [booking.address, booking.city, booking.zipCode]
       .filter(Boolean)
       .join(', ');
-    const guestEmail =
-      recipient === 'customer' ? organizerEmail : booking.customerEmail;
     const params = new URLSearchParams({
       action: 'TEMPLATE',
       text: `${companyName} Booking - ${this.money(booking.price)}`,
@@ -361,13 +354,14 @@ export class BookingService {
       details: [
         `Customer: ${booking.customerName}`,
         `Client email: ${booking.customerEmail}`,
+        `Organizer email: ${organizerEmail}`,
         `Phone: ${booking.customerPhone}`,
         `Services: ${booking.services}`,
         `Estimated price: ${this.money(booking.price)}`,
         `Payment status: ${booking.paymentStatus}`,
       ].join('\n'),
       location,
-      add: guestEmail,
+      add: booking.customerEmail,
     });
     return `https://calendar.google.com/calendar/render?${params.toString()}`;
   }
