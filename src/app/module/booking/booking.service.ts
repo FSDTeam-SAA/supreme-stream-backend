@@ -14,7 +14,7 @@ import {
   CreateBookingDto,
 } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import {
   PaymentStatus,
   Prisma,
@@ -23,6 +23,11 @@ import {
 export interface ExternalTimeslot {
   start_time: string;
   end_time: string;
+}
+
+interface PreferredTimeBlock {
+  start: string;
+  end: string;
 }
 
 interface EmailBooking extends CreateBookingDto {}
@@ -35,8 +40,9 @@ export class BookingService {
 
   async findAvailableTimeslots() {
     const timeslotsApi =
-      process.env.READDY_TIMESLOTS_API ||
+      process.env.READDY_TIMESLOTS_API?.trim() ||
       'https://readdy.ai/api/public/calendar/timeslots/32d14abe-426b-4b1c-b8ab-9b069b8a5627.54c62550c35f1b35b5a7f93adfb9a9c1dbfbc20abc737bd9a6d49c897df8989d';
+    const timezone = this.bookingTimezone();
 
     try {
       const response = await axios.get<
@@ -44,19 +50,28 @@ export class BookingService {
         | {
             timeslots?: ExternalTimeslot[];
           }
-      >(timeslotsApi);
+      >(this.withCacheBuster(timeslotsApi), {
+        headers: {
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+        },
+      });
       const raw = response.data;
       const slots = Array.isArray(raw) ? raw : raw.timeslots || [];
-      const bookedStarts = await this.prisma.booking.findMany({
-        select: { startTime: true },
+      const preferredSlots = this.buildPreferredTimeslots(slots);
+      const bookings = await this.prisma.booking.findMany({
+        select: { startTime: true, endTime: true },
       });
-      const reserved = new Set(
-        bookedStarts.map((booking) => booking.startTime.getTime()),
-      );
 
-      return slots.filter((slot) => {
+      return preferredSlots.filter((slot) => {
         try {
-          return !reserved.has(this.parseDateTime(slot.start_time).getTime());
+          const startTime = this.localDateTimeToDate(slot.start_time, timezone);
+          const endTime = this.localDateTimeToDate(slot.end_time, timezone);
+
+          return !bookings.some(
+            (booking) =>
+              startTime < booking.endTime && endTime > booking.startTime,
+          );
         } catch {
           return false;
         }
@@ -168,12 +183,103 @@ export class BookingService {
   }
 
   private parseDateTime(value: string) {
-    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-    const date = new Date(normalized);
+    const date = this.localDateTimeToDate(value, this.bookingTimezone());
     if (Number.isNaN(date.getTime())) {
       throw new BadRequestException(`Invalid calendar date/time: ${value}`);
     }
     return date;
+  }
+
+  private bookingTimezone() {
+    return process.env.BOOKING_TIMEZONE || 'America/Los_Angeles';
+  }
+
+  private withCacheBuster(url: string) {
+    const freshUrl = new URL(url);
+    freshUrl.searchParams.set('_', String(Date.now()));
+    return freshUrl.toString();
+  }
+
+  private buildPreferredTimeslots(slots: ExternalTimeslot[]) {
+    const dates = new Set<string>();
+    for (const slot of slots) {
+      try {
+        dates.add(this.normalizeLocalDateTime(slot.start_time).slice(0, 10));
+      } catch {
+        continue;
+      }
+    }
+
+    return [...dates].sort().flatMap((date) =>
+      this.preferredTimeBlocks().map((block) => ({
+        start_time: `${date} ${block.start}:00`,
+        end_time: `${date} ${block.end}:00`,
+      })),
+    );
+  }
+
+  private preferredTimeBlocks(): PreferredTimeBlock[] {
+    return [
+      { start: '08:00', end: '10:00' },
+      { start: '09:00', end: '12:00' },
+      { start: '11:00', end: '14:00' },
+      { start: '14:00', end: '17:00' },
+    ];
+  }
+
+  private normalizeLocalDateTime(value: string) {
+    const match = value.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/,
+    );
+    if (!match) {
+      throw new BadRequestException(`Invalid calendar date/time: ${value}`);
+    }
+    const [, year, month, day, hour, minute, second = '00'] = match;
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  }
+
+  private localDateTimeToDate(value: string, timezone: string) {
+    const match = value.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/,
+    );
+    if (!match) return new Date(Number.NaN);
+
+    const [, year, month, day, hour, minute, second = '00'] = match;
+    const localAsUtc = Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    );
+    let utcTime =
+      localAsUtc -
+      this.getTimezoneOffsetMinutes(new Date(localAsUtc), timezone) * 60_000;
+    const correctedUtcTime =
+      localAsUtc -
+      this.getTimezoneOffsetMinutes(new Date(utcTime), timezone) * 60_000;
+    if (correctedUtcTime !== utcTime) {
+      utcTime = correctedUtcTime;
+    }
+
+    return new Date(utcTime);
+  }
+
+  private getTimezoneOffsetMinutes(date: Date, timezone: string) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'shortOffset',
+    });
+    const offset = formatter
+      .formatToParts(date)
+      .find((part) => part.type === 'timeZoneName')?.value;
+    const match = offset?.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/);
+    if (!match) return 0;
+
+    const [, sign, hours, minutes = '0'] = match;
+    const offsetMinutes = Number(hours) * 60 + Number(minutes);
+    return sign === '-' ? -offsetMinutes : offsetMinutes;
   }
 
   private toPaymentStatus(status: BookingPaymentStatus): PaymentStatus {
